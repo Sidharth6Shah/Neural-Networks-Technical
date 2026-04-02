@@ -1,1 +1,0 @@
-# Nanogpt follow-along
