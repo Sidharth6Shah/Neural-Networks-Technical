@@ -83,17 +83,20 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embd, n_embd)
 
     def forward(self, x):
-        return torch.cat([h(x) for h in self.heads], dim=-1) 
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        return self.proj(out)
 
 class FeedForward(nn.Module):
 
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
-            nn.ReLU()
+            nn.Linear(n_embd, 4*n_embd),
+            nn.ReLU(),
+            nn.Linear(4*n_embd, n_embd)
         )
 
     def forward(self, x):
@@ -109,8 +112,10 @@ class Block(nn.Module):
         self.ffwd = FeedForward(n_embd)
 
     def forward(self, x):
-        x = self.sa_heads(x)
-        x = self.ffwd(x)
+        # the 'x + ' portions are residual connections, allowing x to accumulate instead of being replaced.
+        # Without it, gradients being multiplied many times in deeper networks grow extremely small, affecting the ability of the parameters to update adequately (subsequently the models ability to learn).
+        x = x + self.sa_heads(x)
+        x = x + self.ffwd(x)
         return x
 
 # super simple bigram model
@@ -136,8 +141,7 @@ class BigramLanguageModel(nn.Module):
         token_emb = self.token_embedding_table(idx) # (B,T,C)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
         x = token_emb + pos_emb # (B,T,C)
-        x = self.sa_heads(x)
-        x = self.ffwd(x) # (B,T,C)
+        x = self.blocks(x)
         logits = self.lm_head(x) # (B,T,vocab_size)
         
         if targets is None:
