@@ -138,7 +138,7 @@ class BigramLanguageModel(nn.Module):
         # Final output must be 65, with each element representing a possible character so we can softmax it and get the logits.
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(*[Block(n_embd, num_heads=n_head) for _ in n_layer])
+        self.blocks = nn.Sequential(*[Block(n_embd, num_heads=n_head) for _ in range(n_layer)])
         # self.blocks = nn.Sequential(
         #     Block(n_embd, num_heads=4),
         #     Block(n_embd, num_heads=4),
