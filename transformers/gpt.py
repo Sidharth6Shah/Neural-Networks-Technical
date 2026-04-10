@@ -110,12 +110,14 @@ class Block(nn.Module):
         # Each block carries out self attention (communication) and feedforward (computation) so they are no longer needed in the BigramLanguageModel class
         self.sa_heads = MultiHeadAttention(num_heads, head_size) # For num_heads=4 and n_embd=32, head_size will be 8, so each head will have an 8D key, query, value vector
         self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd) 
 
     def forward(self, x):
         # the 'x + ' portions are residual connections, allowing x to accumulate instead of being replaced.
         # Without it, gradients being multiplied many times in deeper networks grow extremely small, affecting the ability of the parameters to update adequately (subsequently the models ability to learn).
-        x = x + self.sa_heads(x)
-        x = x + self.ffwd(x)
+        x = x + self.sa_heads(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
         return x
 
 # super simple bigram model
@@ -132,6 +134,7 @@ class BigramLanguageModel(nn.Module):
             Block(n_embd, num_heads=4),
             Block(n_embd, num_heads=4),
             Block(n_embd, num_heads=4),
+            nn.LayerNorm(n_embd)
         )
         self.lm_head = nn.Linear(n_embd, vocab_size) # Decode the final output into a 65D logits vector
 
