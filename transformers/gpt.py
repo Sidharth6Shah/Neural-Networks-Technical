@@ -99,6 +99,20 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class Block(nn.Module):
+
+    def __init__(self, n_embd, num_heads):
+        super().__init__()
+        head_size = n_embd // num_heads
+        # Each block carries out self attention (communication) and feedforward (computation) so they are no longer needed in the BigramLanguageModel class
+        self.sa_heads = MultiHeadAttention(num_heads, head_size) # For num_heads=4 and n_embd=32, head_size will be 8, so each head will have an 8D key, query, value vector
+        self.ffwd = FeedForward(n_embd)
+
+    def forward(self, x):
+        x = self.sa_heads(x)
+        x = self.ffwd(x)
+        return x
+
 # super simple bigram model
 class BigramLanguageModel(nn.Module):
 
@@ -109,9 +123,12 @@ class BigramLanguageModel(nn.Module):
         # Final output must be 65, with each element representing a possible character so we can softmax it and get the logits.
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.sa_heads = MultiHeadAttention(4, n_embd//4) # 4 heads of 8D self attention running in parralel
-        self.ffwd = FeedForward(n_embd)
-        self.lm_head = nn.Linear(n_embd, vocab_size)
+        self.blocks = nn.Sequential(
+            Block(n_embd, num_heads=4),
+            Block(n_embd, num_heads=4),
+            Block(n_embd, num_heads=4),
+        )
+        self.lm_head = nn.Linear(n_embd, vocab_size) # Decode the final output into a 65D logits vector
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
