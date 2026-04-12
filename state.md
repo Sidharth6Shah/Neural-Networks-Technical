@@ -1,0 +1,9 @@
+A gpt can be build with 4 stages. Pretraining, supervised finetuning, reward modelling, and reinforcement learning. The pipeline is often completed in that order.
+
+First, pretraining is when a model is trained on large amounts of data initially. In teh case of ChatGPT, the model was training on large internet-scale sized datasets. The model's goal at this point was to predict the next token given context. It only wanted to complete documents/predict the next token. Thats it.
+
+Next comes supervised finetuning (SFT). In this stage, the dataset being used for the next leg of training is no longer pure documents, but labelled content. Prompts that follow a "Q:.... A:....." format. This teaches the model to follow instructions, and answer questions. This data is often created by human annotation following strict guidelines to maintain high quality data being given to the model.
+
+Next, reward modelling (RM). In this leg, the form of data being passed in is for comparison. For example, a single prompt with 3 different answers. Typically, someone would rank the responses. This ranking would serve as a ground truth. For training in this stage, each data entry is tokenized and layed out in a row as usual. The model outputs a score for each datapoint/entry, and compares it with the human ranking. This serves as the loss function by which the model follows to improve it's ability to score reponses and understand how responses to prompts align with human preferences.
+
+Finally, in the RL stage, each tokenized datapoint (prompt, compeletion, reward score) is read through by the model, and if the reward score is high, indicating a good response, each token in that prompt is reinforced (increased probability for next time), and the opposite is done for low reward datapoints.
