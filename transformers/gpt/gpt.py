@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
-from torch.nn import Functional as F
+from torch.nn import functional as F
 
 
 class CausualSelfAttention(nn.Module):
@@ -35,7 +35,7 @@ class CausualSelfAttention(nn.Module):
 
 
 
-class MLP:
+class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
@@ -50,7 +50,7 @@ class MLP:
         return x
 
 
-class Block:
+class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
@@ -66,7 +66,7 @@ class Block:
 
 @dataclass
 class GPTConfig:
-    block_size = 256 # Real value: 1024
+    block_size: int = 256 # Real value: 1024
     vocab_size: int = 65 # Real value: 50257 (50k merges + 1 special EOT token + 256 byte tokens)
     n_layer: int = 6 # Real value: 12
     n_head: int = 6 # Real value: 12
@@ -88,7 +88,7 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
     @classmethod
-    def from_pretrained(cls, model_type):
+    def from_pretrained(cls, model_type): #Dont need to pay too much attention to this method
         """Loads pretrained GPT-2 model weights from huggingface"""
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         from transformers import GPT2LMHeadModel
@@ -135,3 +135,6 @@ class GPT(nn.Module):
                     sd[k].copy_(sd_hf[k])
 
         return model
+
+model = GPT.from_pretrained('gpt2')
+print("didnt crash")
