@@ -149,20 +149,27 @@ class GPT(nn.Module):
 
         return model
 
+device = "cpu"
+if (torch.cuda.is_available()):
+    device = "cuda"
+elif (torch.backends.mps, "mps") and torch.backends.mps.is_available():
+    device = "mps"
+
 num_return_sequences = 5
 max_length = 30
 
-model = GPT.from_pretrained('gpt2')
+model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
+# model = GPT(GPTConfig()) # Model w/ randomly initialized weights
 model.eval()
-model.to('mps')
-
+model.to(device)
+print(f"Using device: {device}")
 
 import tiktoken
 enc = tiktoken.get_encoding("gpt2")
 tokens = enc.encode("Hello, I'm a language model,")
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x = tokens.to('mps')
+x = tokens.to(device)
 
 # generate! right now x is (B, T) where B = 5, T = 8
 torch.manual_seed(42)
