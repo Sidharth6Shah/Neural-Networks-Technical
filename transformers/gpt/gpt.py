@@ -210,7 +210,8 @@ torch.manual_seed(1337)
 if torch.mps.is_available():
     torch.mps.manual_seed(1337)
 
-data_loader = DataLoader(B=4, T=32)
+data_loader = DataLoader(B=16, T=1024) #4, 32 for easier workload
+torch.set_float32_matmul_precision('high')
 # model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
 model = GPT(GPTConfig()) # Model w/ randomly initialized weights
 model.to(device)
