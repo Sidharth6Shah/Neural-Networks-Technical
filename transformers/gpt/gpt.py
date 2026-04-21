@@ -27,10 +27,13 @@ class CausualSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor(k.size(-1), dtype=torch.float32)))
-        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        y = att @ v
+        
+        # att = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor(k.size(-1), dtype=torch.float32)))
+        # att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+        # att = F.softmax(att, dim=-1)
+        # y = att @ v
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # Flash attention, which is much more memory efficient than the implementation above
+
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.c_proj(y)
         return y
@@ -213,7 +216,7 @@ if torch.mps.is_available():
 data_loader = DataLoader(B=16, T=1024) #4, 32 for easier workload
 torch.set_float32_matmul_precision('high')
 # model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
-model = GPT(GPTConfig()) # Model w/ randomly initialized weights
+model = GPT(GPTConfig(vocab_size=50304)) # Model w/ randomly initialized weights + overriding vocab_size to a nicer number for smoother computation
 model.to(device)
 model = torch.compile(model)
 
