@@ -11,7 +11,8 @@ class CausualSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd) 
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.c_proj.NANOGPT_SCALE_INIT = 1
 
         self.n_head = config.n_head
         self.n_embd = config.n_embd
@@ -95,12 +96,15 @@ class GPT(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
+        std = 0.02
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if hasattr(module, 'NANOGPT_SCALE_INIT'):
+                std = 2 * (self.config.n_layer) ** -0.5 # 2 because each block has 2 layers (1 attention and 1 mlp)
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
 
     def forward(self, idx, targets=None):
         B, T = idx.size()
@@ -202,6 +206,9 @@ elif (torch.backends.mps, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"Using device: {device}")
 
+torch.manual_seed(1337)
+if torch.mps.is_available():
+    torch.mps.manual_seed(1337)
 
 data_loader = DataLoader(B=4, T=32)
 # model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
