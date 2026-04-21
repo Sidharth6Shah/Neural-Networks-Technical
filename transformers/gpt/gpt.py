@@ -215,6 +215,8 @@ torch.set_float32_matmul_precision('high')
 # model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
 model = GPT(GPTConfig()) # Model w/ randomly initialized weights
 model.to(device)
+model = torch.compile(model)
+
 # Training loop
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
