@@ -67,7 +67,7 @@ class Block(nn.Module):
 @dataclass
 class GPTConfig:
     block_size: int = 256 # Real value: 1024
-    vocab_size: int = 65 # Real value: 50257 (50k merges + 1 special EOT token + 256 byte tokens)
+    vocab_size: int = 50257 #65 # Real value: 50257 (50k merges + 1 special EOT token + 256 byte tokens)
     n_layer: int = 6 # Real value: 12
     n_head: int = 6 # Real value: 12
     n_embd: int = 384 # Real value: 768
@@ -87,7 +87,7 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         B, T = idx.size()
         assert T <= self.config.block_size, "Cannot forward, model block size is exhausted."
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device).unsqueeze(0) # (1, T)
@@ -98,7 +98,10 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
-        return logits
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type): #Dont need to pay too much attention to this method
@@ -154,22 +157,30 @@ if (torch.cuda.is_available()):
     device = "cuda"
 elif (torch.backends.mps, "mps") and torch.backends.mps.is_available():
     device = "mps"
+print(f"Using device: {device}")
+device = "cpu"
 
 num_return_sequences = 5
 max_length = 30
 
-model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
-# model = GPT(GPTConfig()) # Model w/ randomly initialized weights
-model.eval()
-model.to(device)
-print(f"Using device: {device}")
-
+# Create a data batch
 import tiktoken
 enc = tiktoken.get_encoding("gpt2")
-tokens = enc.encode("Hello, I'm a language model,")
-tokens = torch.tensor(tokens, dtype=torch.long)
-tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x = tokens.to(device)
+with open('/Users/sidharthshah/Neural-Networks-Technical/transformers/input.txt', 'r') as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B*T + 1])
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
+
+# model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
+model = GPT(GPTConfig()) # Model w/ randomly initialized weights
+model.to(device)
+logits, loss = model(x, y)
+print(loss)
+import sys; sys.exit(0)
 
 # generate! right now x is (B, T) where B = 5, T = 8
 torch.manual_seed(42)
