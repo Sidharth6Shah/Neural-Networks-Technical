@@ -2,9 +2,13 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
 import tiktoken
 import math
 import inspect
+import os
+from torch.distributed import init_process_group, destroy_process_group
+import torch.distributed as dist
 
 
 class CausualSelfAttention(nn.Module):
@@ -202,9 +206,11 @@ class GPT(nn.Module):
 
 class DataLoader:
 
-    def __init__(self, B, T):
+    def __init__(self, B, T, process_rank, num_processes):
         self.B = B
         self.T = T
+        self.process_rank = process_rank
+        self.num_processes = num_processes
 
         with open('/Users/sidharthshah/Neural-Networks-Technical/transformers/input.txt', 'r') as f:
             text = f.read()
@@ -214,25 +220,47 @@ class DataLoader:
         print(f"loaded: {len(self.tokens)} tokens")
         print(f"1 epoch = {len(self.tokens) // (B * T)} batches")
 
-        self.current_position = 0
+        self.current_position = self.B * self.T * self.process_rank # each process starts at a different offset so they can work on different parts of the data in parallel
 
     def next_batch(self):
         B, T = self.B, self.T
         buf = self.tokens[self.current_position : self.current_position + B*T + 1]
         x = buf[:-1].view(B, T)
         y = buf[1:].view(B, T)
-        self.current_position += B * T
-        if self.current_position + B * T + 1 >= len(self.tokens):
-            self.current_position = 0
+        self.current_position += B * T * self.num_processes # move forward by B*T*num_processes, so that the next batch for this process is non-overlapping with the current batch and also accounts for the fact that there are num_processes many processes working in parallel
+        if self.current_position + (B * T * self.num_processes + 1) >= len(self.tokens):
+            self.current_position = self.B * self.T * self.process_rank
         return x, y
 
+# training loop
+# set up DDP (distributed data parallel).
+# torchrun command sets the env variables RANK, LOCAL_RANK, and WORLD_SIZE
+ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
+if ddp:
+    # use of DDP atm demands CUDA, we set the device appropriately according to rank
+    assert torch.cuda.is_available(), "for now i think we need CUDA for DDP"
+    init_process_group(backend='nccl')
+    ddp_rank = int(os.environ['RANK'])
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])
+    ddp_world_size = int(os.environ['WORLD_SIZE'])
+    device = f'cuda:{ddp_local_rank}'
+    torch.cuda.set_device(device)
+    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
+else:
+    # vanilla, non-DDP run
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+    # attempt to autodetect device
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    print(f"using device: {device}")
 
-device = "cpu"
-if (torch.cuda.is_available()):
-    device = "cuda"
-elif (torch.backends.mps, "mps") and torch.backends.mps.is_available():
-    device = "mps"
-print(f"Using device: {device}")
+
 
 torch.manual_seed(1337)
 if torch.mps.is_available():
@@ -242,19 +270,24 @@ if torch.mps.is_available():
 total_batch_size = 256 #(roughly 2**8)
 B = 4
 T = 32
-assert total_batch_size % (B * T) == 0, "total_batch_size must be divisible by B * T"
-grad_accum_steps = total_batch_size // (B * T)
-print(f"total desired batch size: {total_batch_size}")
-print(f"=> calculated gradient accumulatin steps: {grad_accum_steps}")
+assert total_batch_size % (B * T * ddp_world_size) == 0, "total_batch_size must be divisible by B * T * ddp_world_size"
+grad_accum_steps = total_batch_size // (B * T * ddp_world_size) # number of gradient accumulation steps, accounting for DDP world size (since each process will see a fraction of the total batch size)
+if master_process:
+    print(f"total desired batch size: {total_batch_size}")
+    print(f"=> calculated gradient accumulatin steps: {grad_accum_steps}")
 
-train_loader = DataLoader(B=B, T=T)
 
-data_loader = DataLoader(B=16, T=256) #4, 32 for easier workload
+
+train_loader = DataLoader(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size)
 torch.set_float32_matmul_precision('high')
+
 # model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
 model = GPT(GPTConfig(vocab_size=50304)) # Model w/ randomly initialized weights + overriding vocab_size to a nicer number for smoother computation
 model.to(device)
-# model = torch.compile(model) # Not really that needed for mps, best for cuda
+model = torch.compile(model) # Not really that needed for mps, best for cuda
+if ddp:
+    model = DDP(model, device_ids=[ddp_local_rank])
+raw_model = model.module if ddp else model # unwrap DDP if needed to get the raw model for weight updates and such
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
@@ -272,25 +305,33 @@ def get_lr(it):
 
 # Training loop
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
-optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=3e-4, betas=(0.9, 0.95), eps=1e-8, device=device)
+optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=3e-4, betas=(0.9, 0.95), eps=1e-8, device=device)
 for step in range(max_steps):
     optimizer.zero_grad()
     loss_accum = 0.0
     for microstep in range(grad_accum_steps):
-        x, y = data_loader.next_batch()
+        x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
         with torch.autocast(device_type=device, dtype=torch.float16):
             logits, loss = model(x, y)
         loss = loss / grad_accum_steps # Normalize the loss, as it is accumulated over grad_accum_steps many microsteps
         loss_accum += loss.detach()
+        if ddp:
+            model.require_backward_grad_sync = (microstep == grad_accum_steps - 1) # only sync gradients on the last microstep --> note that this variable was found inside the no_sync() source code
         loss.backward()
+    if ddp:
+        dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG) # average the loss across processes for logging
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     lr = get_lr(step) 
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
     optimizer.step()
-    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
-    print(f"step {step}: loss {loss.item():.4f} | loss.accum {loss_accum:.4f} | norm {norm:.4f} | lr {lr:.6f}")
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
+    if master_process:
+        print(f"step {step}: loss {loss.item():.4f} | loss.accum {loss_accum:.4f} | norm {norm:.4f} | lr {lr:.6f}")
+
+if ddp:
+    destroy_process_group()
 
 import sys; sys.exit(0)
 
