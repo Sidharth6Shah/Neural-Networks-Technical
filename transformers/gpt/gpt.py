@@ -238,6 +238,17 @@ torch.manual_seed(1337)
 if torch.mps.is_available():
     torch.mps.manual_seed(1337)
 
+# total_batch_size = 524288 #(roughly 2**19)
+total_batch_size = 256 #(roughly 2**8)
+B = 4
+T = 32
+assert total_batch_size % (B * T) == 0, "total_batch_size must be divisible by B * T"
+grad_accum_steps = total_batch_size // (B * T)
+print(f"total desired batch size: {total_batch_size}")
+print(f"=> calculated gradient accumulatin steps: {grad_accum_steps}")
+
+train_loader = DataLoader(B=B, T=T)
+
 data_loader = DataLoader(B=16, T=256) #4, 32 for easier workload
 torch.set_float32_matmul_precision('high')
 # model = GPT.from_pretrained('gpt2') # Model w/ pretrained weights from huggingface
@@ -263,18 +274,23 @@ def get_lr(it):
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=3e-4, betas=(0.9, 0.95), eps=1e-8, device=device)
 for step in range(max_steps):
-    x, y = data_loader.next_batch()
-    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, y)
-    loss.backward()
+    loss_accum = 0.0
+    for microstep in range(grad_accum_steps):
+        x, y = data_loader.next_batch()
+        x, y = x.to(device), y.to(device)
+        with torch.autocast(device_type=device, dtype=torch.float16):
+            logits, loss = model(x, y)
+        loss = loss / grad_accum_steps # Normalize the loss, as it is accumulated over grad_accum_steps many microsteps
+        loss_accum += loss.detach()
+        loss.backward()
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     lr = get_lr(step) 
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-    
     optimizer.step()
-    print(f"step {step}: loss {loss.item():.4f} | norm {norm:.4f} | lr {lr:.6f}")
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
+    print(f"step {step}: loss {loss.item():.4f} | loss.accum {loss_accum:.4f} | norm {norm:.4f} | lr {lr:.6f}")
 
 import sys; sys.exit(0)
 
